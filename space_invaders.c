@@ -81,7 +81,7 @@ void overwrite_position(unsigned char new_char, Position position) {
         printf("\x1b[%dC", column_difference);
     }
 
-    printf("%c", new_char);
+    printf("%c\x1b[1D", new_char);
     cursor = position;
 }
 
@@ -165,9 +165,34 @@ void render_initial_game_field(unsigned char game_field[ROWS][COLUMNS]) {
     uart_transmit_string("\x1b[41D");
 }
 
+void render_game_field(void) {
+    for (uint8_t i = 0; i < COLUMNS + 2; i++) {
+        uart_transmit('#');
+    }
+
+    for (uint8_t i = 0; i < ROWS; i++) {
+        uart_transmit('#');
+        for (uint8_t j = 0; j < COLUMNS; j++) {
+            if (i <= 1 && j <= 4) {
+                uart_transmit(ENEMY);
+            } else if (i == player.row && j == player.column) {
+                uart_transmit(PLAYER);
+            } else {
+                uart_transmit(' ');
+            }
+        }
+        
+        uart_transmit('#');
+    }
+    
+    
+}
+
 FILE uart_output = FDEV_SETUP_STREAM(uart_putchar, NULL, _FDEV_SETUP_WRITE);
 
 int main(void) {
+    /* todo: remove game_field, create bounds check for move_enemies
+    merge left and right into a single function */
     uart_init();
     stdout = &uart_output;
     set_initial_game_field(game_field);
@@ -179,7 +204,7 @@ int main(void) {
     while(1) {
         if (ovf_count >= 60) {
             ovf_count = 0;
-            if (enemy_move_count >= 35) {
+            if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
                 enemy_move_count = 0;
                 enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
             }
