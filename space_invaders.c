@@ -6,19 +6,23 @@
 #define BAUD 38400
 #define UBRR_VALUE ((F_CPU/(8UL * BAUD)) - 1UL)
 
-#define ROWS 20
-#define COLUMNS 40
-#define MAX_ENEMIES 10
+#define ROWS 30
+#define COLUMNS 60
+#define MAX_ENEMIES 20
 
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
 #define BULLET ((unsigned char)'*')
 
-unsigned char game_field[ROWS][COLUMNS];
 
-volatile uint8_t ovf_count;
 uint8_t enemy_move_count;
 unsigned char enemy_move_direction = 'r'; //l = left; r = right
+unsigned char player_move_buffer; 
+
+volatile uint8_t player_ticks;
+volatile uint8_t enemy_ticks;
+
+uint8_t rendering = 0;
 
 typedef struct {
     uint8_t row;
@@ -27,15 +31,14 @@ typedef struct {
 
 Position player = {ROWS - 1, COLUMNS / 2};
 Position cursor = {0, 0};
-Position enemies[] = {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4},
-                        {1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}};
+Position enemies[MAX_ENEMIES];
 
 void uart_init(void) {
     UBRR0H = (unsigned char)(UBRR_VALUE >> 8);
     UBRR0L = (unsigned char)(UBRR_VALUE & 0xFF);
 
     UCSR0A = (1 << U2X0);
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
 
@@ -63,12 +66,24 @@ void uart_transmit_string(const char *str) {
     }
 }
 
+void generate_enemy_positions(void) {
+    for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
+        enemies[i].row = 0;
+        enemies[i].column = i;
+    }
+
+    for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
+        enemies[i + (MAX_ENEMIES / 2)].row = 1;
+        enemies[i + (MAX_ENEMIES / 2)].column = i;
+    }
+    
+}
+
 void overwrite_position(unsigned char new_char, Position position) {
     int row_difference = position.row - cursor.row;
     int column_difference = position.column - cursor.column;
 
     //Checks if the cursor should move forward or backward/left or right
-    //Updates current cursor position
     if (row_difference < 0) {
         printf("\x1b[%dA", -row_difference);
     } else if (row_difference > 0) {
@@ -81,7 +96,9 @@ void overwrite_position(unsigned char new_char, Position position) {
         printf("\x1b[%dC", column_difference);
     }
 
+    //Writes a new character and moves back to the argument position
     printf("%c\x1b[1D", new_char);
+    //Updates cursor position
     cursor = position;
 }
 
@@ -90,13 +107,13 @@ void move_enemies_left(void) {
 
     Position p1 = enemies[0];
     p1.column--;
-    Position p2 = enemies[5];
+    Position p2 = enemies[MAX_ENEMIES / 2];
     p2.column--;
 
-    overwrite_position(' ', enemies[4]);
+    overwrite_position(' ', enemies[MAX_ENEMIES / 2 - 1]);
     overwrite_position(ENEMY, p1);
 
-    overwrite_position(' ', enemies[9]);
+    overwrite_position(' ', enemies[MAX_ENEMIES - 1]);
     overwrite_position(ENEMY, p2);
 
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
@@ -108,15 +125,15 @@ void move_enemies_left(void) {
 void move_enemies_right(void) {
     enemy_move_count++;
 
-    Position p1 = enemies[4];
+    Position p1 = enemies[MAX_ENEMIES / 2 - 1];
     p1.column++;
-    Position p2 = enemies[9];
+    Position p2 = enemies[MAX_ENEMIES - 1];
     p2.column++;
 
     overwrite_position(' ', enemies[0]);
     overwrite_position(ENEMY, p1);
 
-    overwrite_position(' ', enemies[5]);
+    overwrite_position(' ', enemies[MAX_ENEMIES / 2]);
     overwrite_position(ENEMY, p2);
 
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
@@ -125,55 +142,67 @@ void move_enemies_right(void) {
     
 }
 
-void set_initial_game_field(unsigned char game_field[ROWS][COLUMNS]) {
-    for (uint8_t i = 0; i < ROWS; i++) {
-        for (uint8_t j = 0; j < COLUMNS; j++) {
-            if (i <= 1 && j <= 4) {
-                //Sets initial enemy positions
-                game_field[i][j] = ENEMY;
-            } else if (i == player.row && j == player.column) {
-                //Sets inital player position
-                game_field[i][j] = PLAYER;
-            } else {
-                game_field[i][j] = (unsigned char)' ';
-            }
-        }
-        
+void move_enemies(void) {
+    if (rendering == 1) {
+        return;
     }
-    
+
+    rendering = 1;
+    //Logic to check in which direction enemies should move
+    if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
+        enemy_move_count = 0;
+        enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
+    }
+
+    if (enemy_move_direction == 'l') {
+        move_enemies_left();
+    } else if (enemy_move_direction == 'r') {
+        move_enemies_right();
+    }
+    rendering = 0;
 }
 
-void render_initial_game_field(unsigned char game_field[ROWS][COLUMNS]) {
-    for (uint8_t i = 0; i < COLUMNS + 2; i++)
-    {
-        uart_transmit('#');
-    }
-    uart_transmit('\r');
-    uart_transmit('\n');
-    
-    for (uint8_t i = 0; i < ROWS; i++) {
-        printf("#%.40s#\r\n", game_field[i]);
+void move_player(void) {
+    if (rendering == 1) {
+        return;
     }
 
-    for (uint8_t i = 0; i < COLUMNS + 2; i++)
-    {
-        uart_transmit('#');
+    rendering = 1;
+    if (player_move_buffer == 'a' && !((player.column - 1) < 0)) {
+        Position new_player_pos = player;
+        new_player_pos.column--;
+        overwrite_position(PLAYER, new_player_pos);
+        overwrite_position(' ', player);
+
+        cursor = player;
+        player = new_player_pos;
+        player_move_buffer = ' ';
     }
-    
-    //Set correct cursor position (game_field[0][0])
-    uart_transmit_string("\x1b[20A");
-    uart_transmit_string("\x1b[41D");
+
+    if (player_move_buffer == 'd' && !((player.column + 1) > (COLUMNS - 1))) {
+        Position new_player_pos = player;
+        new_player_pos.column++;
+        overwrite_position(PLAYER, new_player_pos);
+        overwrite_position(' ', player);
+
+        cursor = player;
+        player = new_player_pos;
+        player_move_buffer = ' ';
+    }
+
+    rendering = 0;
 }
 
 void render_game_field(void) {
     for (uint8_t i = 0; i < COLUMNS + 2; i++) {
         uart_transmit('#');
     }
+    uart_transmit_string("\r\n");
 
     for (uint8_t i = 0; i < ROWS; i++) {
         uart_transmit('#');
         for (uint8_t j = 0; j < COLUMNS; j++) {
-            if (i <= 1 && j <= 4) {
+            if (i <= 1 && j <= (MAX_ENEMIES / 2 - 1)) {
                 uart_transmit(ENEMY);
             } else if (i == player.row && j == player.column) {
                 uart_transmit(PLAYER);
@@ -182,45 +211,50 @@ void render_game_field(void) {
             }
         }
         
+        uart_transmit_string("#\r\n");
+    }
+
+    for (uint8_t i = 0; i < COLUMNS + 2; i++) {
         uart_transmit('#');
     }
     
     
+    //Set correct cursor position {0, 0}
+    printf("\x1b[%dA", ROWS);
+    printf("\x1b[%dD", (COLUMNS + 1));
 }
 
 FILE uart_output = FDEV_SETUP_STREAM(uart_putchar, NULL, _FDEV_SETUP_WRITE);
 
 int main(void) {
-    /* todo: remove game_field, create bounds check for move_enemies
-    merge left and right into a single function */
     uart_init();
     stdout = &uart_output;
-    set_initial_game_field(game_field);
-    render_initial_game_field(game_field);
+    printf("\x1b[?25l");
+    printf("\x1b[1D");
+    printf(" "); //Hides cursor and deletes garbage character
+    printf("\x1b[1D");
+    generate_enemy_positions();
+    render_game_field();
 
     timer_init();
     sei();
 
     while(1) {
-        if (ovf_count >= 60) {
-            ovf_count = 0;
-            if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
-                enemy_move_count = 0;
-                enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
-            }
-
-            if (enemy_move_direction == 'l') {
-                move_enemies_left();
-            } else if (enemy_move_direction == 'r') {
-                move_enemies_right();
-            }
-            // DDRD |= (1 << 4);
-
-            // PORTD ^= (1 << 4);   
-        }
+        if (player_ticks >= 2) {
+            player_ticks = 0;
+            move_player();
+        } else if (enemy_ticks >= 6) {
+            enemy_ticks = 0;
+            move_enemies();
+        }    
     }
 }
 
 ISR(TIMER0_OVF_vect) {
-    ovf_count++;
+    player_ticks++;
+    enemy_ticks++;
+}
+
+ISR(USART_RX_vect) {
+    player_move_buffer = UDR0;
 }
