@@ -22,6 +22,8 @@ unsigned char enemy_move_direction = 'r'; //l = left; r = right
 unsigned char player_move_buffer; 
 uint8_t player_bullet_active = 0;
 uint8_t enemy_death_counter;
+uint8_t player_collision = 0;
+uint8_t check_player_collision = 0;
 
 volatile uint8_t player_ticks;
 volatile uint8_t player_bullet_ticks;
@@ -168,7 +170,7 @@ void move_enemies_left(void) {
     
 }
 
-void move_enemies_down(void) { //Refractor enemy alive detection
+void move_enemies_down(void) {
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         Position new_pos = enemies[i].pos;
         new_pos.row++;
@@ -187,6 +189,10 @@ void move_enemies_down(void) { //Refractor enemy alive detection
 
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         enemies[i].pos.row++;
+    }
+
+    if (enemies[MAX_ENEMIES - 1].pos.row == (ROWS - 1)) {
+        check_player_collision = 1;
     }
 }
 
@@ -317,6 +323,14 @@ void process_input(void) {
     }
 }
 
+void check_player_collison(void) {
+    for (uint8_t i = MAX_ENEMIES / 2; i < MAX_ENEMIES; i++) {
+        if (player.row == enemies[i].pos.row && player.column == enemies[i].pos.column) {
+            player_collision = 1;
+        }
+    }
+}
+
 void render_game_field(void) {
     for (uint8_t i = 0; i < COLUMNS + 2; i++) {
         uart_transmit('#');
@@ -366,11 +380,23 @@ int main(void) {
     while(1) {
         if (enemy_death_counter == MAX_ENEMIES) {
             cli();
+            printf("\x1b[2J");
+            printf("\x1b[H");
+            printf("You won!!");
             break; 
+        }
+
+        if (player_collision == 1) {
+            cli();
+            printf("\x1b[2J");
+            printf("\x1b[H");
+            printf("You lost!!");
+            break;
         }
         if (player_ticks >= 2) {
             player_ticks = 0;
             process_input();
+            check_player_collison();
         }
 
         if (player_bullet_ticks >= 2 && player_bullet_active == 1) {
@@ -378,15 +404,13 @@ int main(void) {
             move_player_bullet();
         }
         
-        if (enemy_ticks >= 12) {
+        if (enemy_ticks >= 6) {
             enemy_ticks = 0;
             move_enemies();
         }    
     }
 
-    printf("\x1b[2J");
-    printf("\x1b[H");
-    printf("You won!!");
+    
 }
 
 ISR(TIMER0_OVF_vect) {
