@@ -251,6 +251,9 @@ void move_enemy_bullets(void) {
             overwrite_position(' ', player_bullet);
             enemy_bullets[i].active = 0;
             player_bullet_active = 0;
+
+            rendering = 0;
+            return;
         }
     }
     
@@ -373,6 +376,7 @@ void move_player_bullet(void) {
     }
     rendering = 1;
 
+    //Check if bullet collides with enemies
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].pos.row == player_bullet.row &&
             enemies[i].pos.column == player_bullet.column &&
@@ -387,6 +391,24 @@ void move_player_bullet(void) {
         }
     }
 
+    //Check if bullet will collide with enemy bullets
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 1 &&
+            enemy_bullets[i].pos.row == player_bullet.row &&
+            enemy_bullets[i].pos.column == player_bullet.column) 
+        {
+            
+            overwrite_position(' ', player_bullet);
+            enemy_bullets[i].active = 0;
+            player_bullet_active = 0;
+
+            rendering = 0;
+            return;
+        }
+    }
+    
+
+    //Check if bullet will be out of bounds
     if (player_bullet.row == 0) {
         overwrite_position(' ', player_bullet);
         player_bullet_active = 0;
@@ -395,6 +417,7 @@ void move_player_bullet(void) {
         return;
     }
 
+    //Move bullet
     overwrite_position(' ', player_bullet);
     player_bullet.row--;
     overwrite_position(BULLET, player_bullet);
@@ -502,12 +525,12 @@ int main(void) {
             move_enemies();
         }
 
-        if (enemy_ticks >= 12) {
+        if (enemy_ticks >= 24) {
             enemy_ticks = 0;
             move_enemy_bullets();
         }
         
-        if (enemy_bullet_ticks >= 60) {
+        if (enemy_bullet_ticks >= 120) {
             enemy_bullet_ticks = 0;
             shoot_enemy_bullet();
         }
