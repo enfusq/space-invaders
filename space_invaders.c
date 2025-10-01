@@ -13,12 +13,14 @@
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
 #define BULLET ((unsigned char)'*')
+#define ENEMY_BULLET_LIMIT ((MAX_ENEMIES / 2) % 2 == 0) ? MAX_ENEMIES / 2 : (MAX_ENEMIES / 2) - 1
 
 
 uint8_t enemy_move_count;
 uint8_t enemy_direction_changed;
 unsigned char enemy_move_direction = 'r'; //l = left; r = right
 unsigned char player_move_buffer; 
+uint8_t player_bullet_active = 0;
 
 volatile uint8_t player_ticks;
 volatile uint8_t enemy_ticks;
@@ -30,9 +32,21 @@ typedef struct {
     uint8_t column;
 } Position;
 
+typedef struct {
+    Position pos;
+    uint8_t alive;
+} Enemy;
+
+typedef struct {
+    Position pos;
+    uint8_t active;
+} EnemyBullet;
+
 Position player = {ROWS - 1, COLUMNS / 2};
 Position cursor = {0, 0};
 Position enemies[MAX_ENEMIES];
+Position player_bullet;
+Position enemy_bullets[ENEMY_BULLET_LIMIT];
 
 void uart_init(void) {
     UBRR0H = (unsigned char)(UBRR_VALUE >> 8);
@@ -181,35 +195,78 @@ void move_enemies(void) {
     rendering = 0;
 }
 
-void move_player(void) {
+void move_player_left(void) {
     if (rendering == 1) {
         return;
     }
     rendering = 1;
 
-    if (player_move_buffer == 'a' && !((player.column - 1) < 0)) {
-        Position new_player_pos = player;
-        new_player_pos.column--;
-        overwrite_position(PLAYER, new_player_pos);
-        overwrite_position(' ', player);
+    Position new_player_pos = player;
+    new_player_pos.column--;
+    overwrite_position(PLAYER, new_player_pos);
+    overwrite_position(' ', player);
 
-        cursor = player;
-        player = new_player_pos;
-        player_move_buffer = ' ';
-    }
-
-    if (player_move_buffer == 'd' && !((player.column + 1) > (COLUMNS - 1))) {
-        Position new_player_pos = player;
-        new_player_pos.column++;
-        overwrite_position(PLAYER, new_player_pos);
-        overwrite_position(' ', player);
-
-        cursor = player;
-        player = new_player_pos;
-        player_move_buffer = ' ';
-    }
+    cursor = player;
+    player = new_player_pos;
+    player_move_buffer = ' ';
 
     rendering = 0;
+}
+
+void move_player_right(void) {
+    if (rendering == 1) {
+        return;
+    }
+    rendering = 1;
+
+    
+    Position new_player_pos = player;
+    new_player_pos.column++;
+    overwrite_position(PLAYER, new_player_pos);
+    overwrite_position(' ', player);
+
+    cursor = player;
+    player = new_player_pos;
+    player_move_buffer = ' ';
+
+    rendering = 0;
+}
+
+void shoot_player_bullet(void) {
+    if (rendering == 1) {
+        return;
+    }
+    rendering = 1;
+
+    Position player_bullet = player;
+    player_bullet.row--;
+
+    overwrite_position(BULLET, player_bullet);
+    player_bullet_active = 1;
+    player_move_buffer = ' ';
+
+    rendering = 0;
+}
+
+void move_player_bullet(void) {
+    if (player_bullet.row <= 0) {
+        player_bullet_active = 0;
+        overwrite_position(' ', player_bullet);
+    }
+}
+
+void process_input(void) {
+    if (player_move_buffer == 'a' && player.column != 0) {
+        move_player_left();
+    }
+
+    if (player_move_buffer == 'd' && player.column != (COLUMNS - 1)) {
+        move_player_right();
+    }
+
+    if (player_move_buffer == 'w' && player_bullet_active == 0) {
+        shoot_player_bullet();
+    }
 }
 
 void render_game_field(void) {
@@ -250,7 +307,7 @@ int main(void) {
     stdout = &uart_output;
     printf("\x1b[?25l");
     printf("\x1b[1D");
-    printf(" "); //Hides cursor and deletes garbage character
+    printf(" "); //Hides cursor and deletes garbage character (bug)
     printf("\x1b[1D");
     generate_enemy_positions();
     render_game_field();
@@ -260,9 +317,10 @@ int main(void) {
 
     while(1) {
         if (player_ticks >= 2) {
-            player_ticks = 0;
-            move_player();
-        } else if (enemy_ticks >= 6) {
+            process_input();
+        }
+        
+        if (enemy_ticks >= 6) {
             enemy_ticks = 0;
             move_enemies();
         }    
