@@ -13,8 +13,7 @@
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
 #define BULLET ((unsigned char)'*')
-#define ENEMY_BULLET_LIMIT ((MAX_ENEMIES / 2) % 2 == 0) ? MAX_ENEMIES / 2 : (MAX_ENEMIES / 2) - 1
-
+#define ENEMY_BULLET_LIMIT (MAX_ENEMIES / 2)
 
 uint8_t enemy_move_count;
 uint8_t enemy_direction_changed;
@@ -22,10 +21,13 @@ unsigned char enemy_move_direction = 'r'; //l = left; r = right
 unsigned char player_move_buffer; 
 uint8_t player_bullet_active = 0;
 uint8_t enemy_death_counter;
+uint8_t player_collision = 0;
+uint8_t check_player_collision = 0;
 
 volatile uint8_t player_ticks;
 volatile uint8_t player_bullet_ticks;
 volatile uint8_t enemy_ticks;
+volatile uint8_t enemy_bullet_ticks;
 
 uint8_t rendering = 0;
 
@@ -101,6 +103,14 @@ void generate_enemies(void) {
     
 }
 
+void initialize_enemy_bullet_array(void) {
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        enemy_bullets[i].pos.row = 0;
+        enemy_bullets[i].pos.column = 0;
+        enemy_bullets[i].active = 0;
+    }
+}
+
 void overwrite_position(unsigned char new_char, Position position) {
     int row_difference = position.row - cursor.row;
     int column_difference = position.column - cursor.column;
@@ -168,7 +178,7 @@ void move_enemies_left(void) {
     
 }
 
-void move_enemies_down(void) { //Refractor enemy alive detection
+void move_enemies_down(void) {
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         Position new_pos = enemies[i].pos;
         new_pos.row++;
@@ -188,6 +198,98 @@ void move_enemies_down(void) { //Refractor enemy alive detection
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         enemies[i].pos.row++;
     }
+
+    if (enemies[MAX_ENEMIES - 1].pos.row == (ROWS - 1)) {
+        check_player_collision = 1;
+    }
+}
+
+void shoot_enemy_bullet(void) {
+    if (rendering == 1) return;
+    rendering = 1;
+
+    int first_empty_index = -1;
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 0) {
+            first_empty_index = i;
+            break;
+        } 
+    }
+    
+    if (first_empty_index < 0) {
+        rendering = 0;
+        return; //returns if all bullets already on screen
+    }
+
+    for (int i = MAX_ENEMIES - 1; i >= 0; i--) {
+        if (enemies[i].alive == 1) {
+            enemy_bullets[first_empty_index].pos = enemies[i].pos;
+            enemy_bullets[first_empty_index].pos.row++;
+
+            enemy_bullets[first_empty_index].active = 1;
+            overwrite_position(BULLET, enemy_bullets[first_empty_index].pos);
+
+            rendering = 0;
+            return;
+        }
+    }
+
+    rendering = 0;
+}
+
+void move_enemy_bullets(void) {
+    if (rendering == 1) return;
+    rendering = 1;
+
+    //Check if bullets collide with player bullet
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].pos.row == player_bullet.row &&
+            enemy_bullets[i].pos.column == player_bullet.column &&
+            enemy_bullets[i].active == 1 &&
+            player_bullet_active == 1)
+        {
+            overwrite_position(' ', player_bullet);
+            enemy_bullets[i].active = 0;
+            player_bullet_active = 0;
+
+            rendering = 0;
+            return;
+        }
+    }
+    
+    //Check if bullets collide with player
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active && 
+            enemy_bullets[i].pos.row == player.row &&
+            enemy_bullets[i].pos.column == player.column)
+        {
+            player_collision = 1;
+            rendering = 0;
+            return;
+        }
+        
+    }
+
+    //Check if bullets will be out of bounds
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].pos.row >= (ROWS - 1) &&
+            enemy_bullets[i].active == 1)
+        {
+            enemy_bullets[i].active = 0;
+            overwrite_position(' ', enemy_bullets[i].pos);
+        }
+    }
+    
+    //Move bullets
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 1) {
+            overwrite_position(' ', enemy_bullets[i].pos);
+            enemy_bullets[i].pos.row++;
+            overwrite_position(BULLET, enemy_bullets[i].pos);
+        }
+    }
+
+    rendering = 0;
 }
 
 void move_enemies(void) {
@@ -274,6 +376,7 @@ void move_player_bullet(void) {
     }
     rendering = 1;
 
+    //Check if bullet collides with enemies
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].pos.row == player_bullet.row &&
             enemies[i].pos.column == player_bullet.column &&
@@ -288,6 +391,24 @@ void move_player_bullet(void) {
         }
     }
 
+    //Check if bullet will collide with enemy bullets
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 1 &&
+            enemy_bullets[i].pos.row == player_bullet.row &&
+            enemy_bullets[i].pos.column == player_bullet.column) 
+        {
+            
+            overwrite_position(' ', player_bullet);
+            enemy_bullets[i].active = 0;
+            player_bullet_active = 0;
+
+            rendering = 0;
+            return;
+        }
+    }
+    
+
+    //Check if bullet will be out of bounds
     if (player_bullet.row == 0) {
         overwrite_position(' ', player_bullet);
         player_bullet_active = 0;
@@ -296,6 +417,7 @@ void move_player_bullet(void) {
         return;
     }
 
+    //Move bullet
     overwrite_position(' ', player_bullet);
     player_bullet.row--;
     overwrite_position(BULLET, player_bullet);
@@ -314,6 +436,14 @@ void process_input(void) {
 
     if (player_move_buffer == 'w' && player_bullet_active == 0) {
         shoot_player_bullet();
+    }
+}
+
+void check_player_collison(void) {
+    for (uint8_t i = MAX_ENEMIES / 2; i < MAX_ENEMIES; i++) {
+        if (player.row == enemies[i].pos.row && player.column == enemies[i].pos.column) {
+            player_collision = 1;
+        }
     }
 }
 
@@ -358,6 +488,7 @@ int main(void) {
     printf(" "); //Hides cursor and deletes garbage character (bug)
     printf("\x1b[1D");
     generate_enemies();
+    initialize_enemy_bullet_array();
     render_game_field();
 
     timer_init();
@@ -366,11 +497,23 @@ int main(void) {
     while(1) {
         if (enemy_death_counter == MAX_ENEMIES) {
             cli();
+            printf("\x1b[2J");
+            printf("\x1b[H");
+            printf("You won!!");
             break; 
+        }
+
+        if (player_collision == 1) {
+            cli();
+            printf("\x1b[2J");
+            printf("\x1b[H");
+            printf("You lost!!");
+            break;
         }
         if (player_ticks >= 2) {
             player_ticks = 0;
             process_input();
+            check_player_collison();
         }
 
         if (player_bullet_ticks >= 2 && player_bullet_active == 1) {
@@ -378,21 +521,27 @@ int main(void) {
             move_player_bullet();
         }
         
-        if (enemy_ticks >= 12) {
-            enemy_ticks = 0;
+        if (enemy_ticks % 6 == 0) {
             move_enemies();
-        }    
-    }
+        }
 
-    printf("\x1b[2J");
-    printf("\x1b[H");
-    printf("You won!!");
+        if (enemy_ticks >= 24) {
+            enemy_ticks = 0;
+            move_enemy_bullets();
+        }
+        
+        if (enemy_bullet_ticks >= 120) {
+            enemy_bullet_ticks = 0;
+            shoot_enemy_bullet();
+        }
+    }
 }
 
 ISR(TIMER0_OVF_vect) {
     player_ticks++;
     enemy_ticks++;
     player_bullet_ticks++;
+    enemy_bullet_ticks++;
 }
 
 ISR(USART_RX_vect) {
