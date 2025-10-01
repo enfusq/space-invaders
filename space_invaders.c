@@ -13,8 +13,7 @@
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
 #define BULLET ((unsigned char)'*')
-#define ENEMY_BULLET_LIMIT ((MAX_ENEMIES / 2) % 2 == 0) ? MAX_ENEMIES / 2 : (MAX_ENEMIES / 2) - 1
-
+#define ENEMY_BULLET_LIMIT (MAX_ENEMIES / 2)
 
 uint8_t enemy_move_count;
 uint8_t enemy_direction_changed;
@@ -28,6 +27,7 @@ uint8_t check_player_collision = 0;
 volatile uint8_t player_ticks;
 volatile uint8_t player_bullet_ticks;
 volatile uint8_t enemy_ticks;
+volatile uint8_t enemy_bullet_ticks;
 
 uint8_t rendering = 0;
 
@@ -101,6 +101,14 @@ void generate_enemies(void) {
     }
     
     
+}
+
+void initialize_enemy_bullet_array(void) {
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        enemy_bullets[i].pos.row = 0;
+        enemy_bullets[i].pos.column = 0;
+        enemy_bullets[i].active = 0;
+    }
 }
 
 void overwrite_position(unsigned char new_char, Position position) {
@@ -194,6 +202,91 @@ void move_enemies_down(void) {
     if (enemies[MAX_ENEMIES - 1].pos.row == (ROWS - 1)) {
         check_player_collision = 1;
     }
+}
+
+void shoot_enemy_bullet(void) {
+    if (rendering == 1) return;
+    rendering = 1;
+
+    int first_empty_index = -1;
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 0) {
+            first_empty_index = i;
+            break;
+        } 
+    }
+    
+    if (first_empty_index < 0) {
+        rendering = 0;
+        return; //returns if all bullets already on screen
+    }
+
+    for (int i = MAX_ENEMIES - 1; i >= 0; i--) {
+        if (enemies[i].alive == 1) {
+            enemy_bullets[first_empty_index].pos = enemies[i].pos;
+            enemy_bullets[first_empty_index].pos.row++;
+
+            enemy_bullets[first_empty_index].active = 1;
+            overwrite_position(BULLET, enemy_bullets[first_empty_index].pos);
+
+            rendering = 0;
+            return;
+        }
+    }
+
+    rendering = 0;
+}
+
+void move_enemy_bullets(void) {
+    if (rendering == 1) return;
+    rendering = 1;
+
+    //Check if bullets collide with player bullet
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].pos.row == player_bullet.row &&
+            enemy_bullets[i].pos.column == player_bullet.column &&
+            enemy_bullets[i].active == 1 &&
+            player_bullet_active == 1)
+        {
+            overwrite_position(' ', player_bullet);
+            enemy_bullets[i].active = 0;
+            player_bullet_active = 0;
+        }
+    }
+    
+    //Check if bullets collide with player
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active && 
+            enemy_bullets[i].pos.row == player.row &&
+            enemy_bullets[i].pos.column == player.column)
+        {
+            player_collision = 1;
+            rendering = 0;
+            return;
+        }
+        
+    }
+
+    //Check if bullets will be out of bounds
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].pos.row >= (ROWS - 1) &&
+            enemy_bullets[i].active == 1)
+        {
+            enemy_bullets[i].active = 0;
+            overwrite_position(' ', enemy_bullets[i].pos);
+        }
+    }
+    
+    //Move bullets
+    for (uint8_t i = 0; i < ENEMY_BULLET_LIMIT; i++) {
+        if (enemy_bullets[i].active == 1) {
+            overwrite_position(' ', enemy_bullets[i].pos);
+            enemy_bullets[i].pos.row++;
+            overwrite_position(BULLET, enemy_bullets[i].pos);
+        }
+    }
+
+    rendering = 0;
 }
 
 void move_enemies(void) {
@@ -372,6 +465,7 @@ int main(void) {
     printf(" "); //Hides cursor and deletes garbage character (bug)
     printf("\x1b[1D");
     generate_enemies();
+    initialize_enemy_bullet_array();
     render_game_field();
 
     timer_init();
@@ -404,19 +498,27 @@ int main(void) {
             move_player_bullet();
         }
         
-        if (enemy_ticks >= 6) {
-            enemy_ticks = 0;
+        if (enemy_ticks % 6 == 0) {
             move_enemies();
-        }    
-    }
+        }
 
-    
+        if (enemy_ticks >= 12) {
+            enemy_ticks = 0;
+            move_enemy_bullets();
+        }
+        
+        if (enemy_bullet_ticks >= 60) {
+            enemy_bullet_ticks = 0;
+            shoot_enemy_bullet();
+        }
+    }
 }
 
 ISR(TIMER0_OVF_vect) {
     player_ticks++;
     enemy_ticks++;
     player_bullet_ticks++;
+    enemy_bullet_ticks++;
 }
 
 ISR(USART_RX_vect) {
