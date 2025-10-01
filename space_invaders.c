@@ -6,20 +6,25 @@
 #define BAUD 38400
 #define UBRR_VALUE ((F_CPU/(8UL * BAUD)) - 1UL)
 
-#define ROWS 30
-#define COLUMNS 60
-#define MAX_ENEMIES 20
+#define ROWS 20
+#define COLUMNS 40
+#define MAX_ENEMIES 12  
 
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
 #define BULLET ((unsigned char)'*')
+#define ENEMY_BULLET_LIMIT ((MAX_ENEMIES / 2) % 2 == 0) ? MAX_ENEMIES / 2 : (MAX_ENEMIES / 2) - 1
 
 
 uint8_t enemy_move_count;
+uint8_t enemy_direction_changed;
 unsigned char enemy_move_direction = 'r'; //l = left; r = right
 unsigned char player_move_buffer; 
+uint8_t player_bullet_active = 0;
+uint8_t enemy_death_counter;
 
 volatile uint8_t player_ticks;
+volatile uint8_t player_bullet_ticks;
 volatile uint8_t enemy_ticks;
 
 uint8_t rendering = 0;
@@ -29,9 +34,21 @@ typedef struct {
     uint8_t column;
 } Position;
 
+typedef struct {
+    Position pos;
+    uint8_t alive;
+} Enemy;
+
+typedef struct {
+    Position pos;
+    uint8_t active;
+} EnemyBullet;
+
 Position player = {ROWS - 1, COLUMNS / 2};
 Position cursor = {0, 0};
-Position enemies[MAX_ENEMIES];
+Position player_bullet;
+Enemy enemies[MAX_ENEMIES];
+EnemyBullet enemy_bullets[ENEMY_BULLET_LIMIT];
 
 void uart_init(void) {
     UBRR0H = (unsigned char)(UBRR_VALUE >> 8);
@@ -66,16 +83,21 @@ void uart_transmit_string(const char *str) {
     }
 }
 
-void generate_enemy_positions(void) {
+void generate_enemies(void) {
     for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
-        enemies[i].row = 0;
-        enemies[i].column = i;
+        enemies[i].pos.row = 0;
+        enemies[i].pos.column = i;
     }
 
     for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
-        enemies[i + (MAX_ENEMIES / 2)].row = 1;
-        enemies[i + (MAX_ENEMIES / 2)].column = i;
+        enemies[i + (MAX_ENEMIES / 2)].pos.row = 1;
+        enemies[i + (MAX_ENEMIES / 2)].pos.column = i;
     }
+
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].alive = 1;
+    }
+    
     
 }
 
@@ -102,95 +124,197 @@ void overwrite_position(unsigned char new_char, Position position) {
     cursor = position;
 }
 
-void move_enemies_left(void) {
+void move_enemies_right(void) {
     enemy_move_count++;
-
-    Position p1 = enemies[0];
-    p1.column--;
-    Position p2 = enemies[MAX_ENEMIES / 2];
-    p2.column--;
-
-    overwrite_position(' ', enemies[MAX_ENEMIES / 2 - 1]);
-    overwrite_position(ENEMY, p1);
-
-    overwrite_position(' ', enemies[MAX_ENEMIES - 1]);
-    overwrite_position(ENEMY, p2);
-
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
-        enemies[i].column--;
+        Position new = enemies[i].pos;
+        new.column++;
+
+        if (enemies[i].alive == 1) {
+            overwrite_position(ENEMY, new);
+        } else {
+            overwrite_position(' ', new);
+        }
+    }
+
+    overwrite_position(' ', enemies[0].pos);
+    overwrite_position(' ', enemies[MAX_ENEMIES / 2].pos);
+    
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].pos.column++;
     }
     
 }
 
-void move_enemies_right(void) {
+void move_enemies_left(void) {
     enemy_move_count++;
-
-    Position p1 = enemies[MAX_ENEMIES / 2 - 1];
-    p1.column++;
-    Position p2 = enemies[MAX_ENEMIES - 1];
-    p2.column++;
-
-    overwrite_position(' ', enemies[0]);
-    overwrite_position(ENEMY, p1);
-
-    overwrite_position(' ', enemies[MAX_ENEMIES / 2]);
-    overwrite_position(ENEMY, p2);
-
     for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
-        enemies[i].column++;
+        Position new = enemies[i].pos;
+        new.column--;
+
+        if (enemies[i].alive == 1) {
+            overwrite_position(ENEMY, new);
+        } else {
+            overwrite_position(' ', new);
+        }
     }
     
+    overwrite_position(' ', enemies[MAX_ENEMIES / 2 - 1].pos);
+    overwrite_position(' ', enemies[MAX_ENEMIES - 1].pos);
+
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].pos.column--;
+    }
+    
+}
+
+void move_enemies_down(void) { //Refractor enemy alive detection
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        Position new_pos = enemies[i].pos;
+        new_pos.row++;
+
+        if (enemies[i].alive == 1) {
+            overwrite_position(ENEMY, new_pos);
+        } else {
+            overwrite_position(' ', new_pos);
+        }
+    }
+
+    for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
+        overwrite_position(' ', enemies[i].pos);
+    }
+    
+
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].pos.row++;
+    }
 }
 
 void move_enemies(void) {
     if (rendering == 1) {
         return;
     }
-
     rendering = 1;
-    //Logic to check in which direction enemies should move
-    if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
-        enemy_move_count = 0;
-        enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
-    }
 
-    if (enemy_move_direction == 'l') {
+    if (enemy_direction_changed >= 3) {
+        enemy_direction_changed = 0;
+        move_enemies_down();
+    } else if (enemy_move_direction == 'l') {
         move_enemies_left();
     } else if (enemy_move_direction == 'r') {
         move_enemies_right();
     }
+
+    //Logic to check in which direction enemies should move
+    if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
+        enemy_move_count = 0;
+        enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
+        enemy_direction_changed++;
+    } 
+    
     rendering = 0;
 }
 
-void move_player(void) {
+void move_player_left(void) {
     if (rendering == 1) {
         return;
     }
-
     rendering = 1;
-    if (player_move_buffer == 'a' && !((player.column - 1) < 0)) {
-        Position new_player_pos = player;
-        new_player_pos.column--;
-        overwrite_position(PLAYER, new_player_pos);
-        overwrite_position(' ', player);
 
-        cursor = player;
-        player = new_player_pos;
-        player_move_buffer = ' ';
-    }
+    Position new_player_pos = player;
+    new_player_pos.column--;
+    overwrite_position(PLAYER, new_player_pos);
+    overwrite_position(' ', player);
 
-    if (player_move_buffer == 'd' && !((player.column + 1) > (COLUMNS - 1))) {
-        Position new_player_pos = player;
-        new_player_pos.column++;
-        overwrite_position(PLAYER, new_player_pos);
-        overwrite_position(' ', player);
-
-        cursor = player;
-        player = new_player_pos;
-        player_move_buffer = ' ';
-    }
+    cursor = player;
+    player = new_player_pos;
+    player_move_buffer = ' ';
 
     rendering = 0;
+}
+
+void move_player_right(void) {
+    if (rendering == 1) {
+        return;
+    }
+    rendering = 1;
+
+    
+    Position new_player_pos = player;
+    new_player_pos.column++;
+    overwrite_position(PLAYER, new_player_pos);
+    overwrite_position(' ', player);
+
+    cursor = player;
+    player = new_player_pos;
+    player_move_buffer = ' ';
+
+    rendering = 0;
+}
+
+void shoot_player_bullet(void) {
+    if (rendering == 1) {
+        return;
+    }
+    rendering = 1;
+
+    player_bullet = player;
+    player_bullet.row--;
+
+    overwrite_position(BULLET, player_bullet);
+    player_bullet_active = 1;
+    player_move_buffer = ' ';
+
+    rendering = 0;
+}
+
+void move_player_bullet(void) {
+    if (rendering == 1) {
+        return;
+    }
+    rendering = 1;
+
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        if (enemies[i].pos.row == player_bullet.row &&
+            enemies[i].pos.column == player_bullet.column &&
+            enemies[i].alive == 1) 
+        {   
+            enemies[i].alive = 0;
+            player_bullet_active = 0;
+            enemy_death_counter++;
+
+            rendering = 0;
+            return;
+        }
+    }
+
+    if (player_bullet.row == 0) {
+        overwrite_position(' ', player_bullet);
+        player_bullet_active = 0;
+
+        rendering = 0;
+        return;
+    }
+
+    overwrite_position(' ', player_bullet);
+    player_bullet.row--;
+    overwrite_position(BULLET, player_bullet);
+
+    rendering = 0;
+}
+
+void process_input(void) {
+    if (player_move_buffer == 'a' && player.column != 0) {
+        move_player_left();
+    }
+
+    if (player_move_buffer == 'd' && player.column != (COLUMNS - 1)) {
+        move_player_right();
+    }
+
+    if (player_move_buffer == 'w' && player_bullet_active == 0) {
+        shoot_player_bullet();
+    }
 }
 
 void render_game_field(void) {
@@ -231,28 +355,44 @@ int main(void) {
     stdout = &uart_output;
     printf("\x1b[?25l");
     printf("\x1b[1D");
-    printf(" "); //Hides cursor and deletes garbage character
+    printf(" "); //Hides cursor and deletes garbage character (bug)
     printf("\x1b[1D");
-    generate_enemy_positions();
+    generate_enemies();
     render_game_field();
 
     timer_init();
     sei();
 
     while(1) {
+        if (enemy_death_counter == MAX_ENEMIES) {
+            cli();
+            break; 
+        }
         if (player_ticks >= 2) {
             player_ticks = 0;
-            move_player();
-        } else if (enemy_ticks >= 6) {
+            process_input();
+        }
+
+        if (player_bullet_ticks >= 2 && player_bullet_active == 1) {
+            player_bullet_ticks = 0;
+            move_player_bullet();
+        }
+        
+        if (enemy_ticks >= 12) {
             enemy_ticks = 0;
             move_enemies();
         }    
     }
+
+    printf("\x1b[2J");
+    printf("\x1b[H");
+    printf("You won!!");
 }
 
 ISR(TIMER0_OVF_vect) {
     player_ticks++;
     enemy_ticks++;
+    player_bullet_ticks++;
 }
 
 ISR(USART_RX_vect) {
