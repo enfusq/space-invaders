@@ -6,9 +6,9 @@
 #define BAUD 38400
 #define UBRR_VALUE ((F_CPU/(8UL * BAUD)) - 1UL)
 
-#define ROWS 30
-#define COLUMNS 60
-#define MAX_ENEMIES 20
+#define ROWS 20
+#define COLUMNS 40
+#define MAX_ENEMIES 16
 
 #define ENEMY ((unsigned char)'W')
 #define PLAYER ((unsigned char)'^')
@@ -16,6 +16,7 @@
 
 
 uint8_t enemy_move_count;
+uint8_t enemy_direction_changed;
 unsigned char enemy_move_direction = 'r'; //l = left; r = right
 unsigned char player_move_buffer; 
 
@@ -142,23 +143,41 @@ void move_enemies_right(void) {
     
 }
 
+void move_enemies_down(void) {
+    for (uint8_t i = 0; i < MAX_ENEMIES / 2; i++) {
+        overwrite_position(' ', enemies[i]);
+        Position pos = enemies[i];
+        pos.row += 2;
+        overwrite_position(ENEMY, pos);
+    }    
+
+    for (uint8_t i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].row++;
+    }
+}
+
 void move_enemies(void) {
     if (rendering == 1) {
         return;
     }
-
     rendering = 1;
-    //Logic to check in which direction enemies should move
-    if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
-        enemy_move_count = 0;
-        enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
-    }
 
-    if (enemy_move_direction == 'l') {
+    if (enemy_direction_changed >= 3) {
+        enemy_direction_changed = 0;
+        move_enemies_down();
+    } else if (enemy_move_direction == 'l') {
         move_enemies_left();
     } else if (enemy_move_direction == 'r') {
         move_enemies_right();
     }
+
+    //Logic to check in which direction enemies should move
+    if (enemy_move_count >= (COLUMNS - MAX_ENEMIES / 2)) {
+        enemy_move_count = 0;
+        enemy_move_direction = (enemy_move_direction == 'l') ? 'r' : 'l';
+        enemy_direction_changed++;
+    } 
+    
     rendering = 0;
 }
 
@@ -166,8 +185,8 @@ void move_player(void) {
     if (rendering == 1) {
         return;
     }
-
     rendering = 1;
+
     if (player_move_buffer == 'a' && !((player.column - 1) < 0)) {
         Position new_player_pos = player;
         new_player_pos.column--;
